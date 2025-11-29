@@ -3,44 +3,58 @@
 import subprocess
 try:
     from os import system, name
-    import sys, os, json, random, time, asyncio, pyfade, discord
+    import sys, os, json, random, time, asyncio, discord 
     from datetime import datetime
     from discord.ext import commands
     from colorama import Fore, init, Style; init()
-    # 24/7稼働に必要なモジュールを追加
+    # 24/7稼働に必要なモジュール
     from flask import Flask
     from threading import Thread
 except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", '-r', 'requirements.txt'])
-    from os import system, name
-    import sys, os, json, random, time, asyncio, pyfade, discord
-    from datetime import datetime
-    from discord.ext import commands
-    from colorama import Fore, init, Style; init()
-    from flask import Flask
-    from threading import Thread # 念のため再インポート
+    # クラッシュ回避のため、必要なモジュールをチェック
+    needed_packages = ['discord.py', 'Flask', 'gunicorn', 'requests', 'colorama']
+    # pyfadeは削除済み
+    
+    print(f"{Fore.RED}Missing dependencies. Installing now...")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", *needed_packages])
+        # 再度インポートを試みる
+        from os import system, name
+        import sys, os, json, random, time, asyncio, discord
+        from datetime import datetime
+        from discord.ext import commands
+        from colorama import Fore, init, Style; init()
+        from flask import Flask
+        from threading import Thread
+    except Exception as e:
+        print(f"{Fore.RED}Failed to install dependencies: {e}")
+        sys.exit(1)
 
 sys.tracebacklimit = 0
 
-# --- 24/7 Webサーバー機能 ---
+# --- 24/7 Webサーバー機能 (Render/UptimeRobot対応) ---
+# GunicornがこのFlaskアプリ (app) をメインとしてロードする
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    # UptimeRobotがこの野郎が生きているかをチェックするエンドポイントだ
+    # UptimeRobotからのPingに応答するエンドポイント
     return "Karuma Tool is alive, you dumb fucks!", 200
 
 def run_server():
-    # Webサーバーをバックグラウンドで起動だ
-    port = os.environ.get('PORT', 8080) # Renderが使う環境変数PORTに対応
+    # Webサーバーをバックグラウンドで起動
+    # Renderは環境変数'PORT'を使う
+    port = os.environ.get('PORT', 8080) 
     print(f"{Fore.CYAN}Web Server running to keep the bot alive! Port {port}.")
-    app.run(host='0.0.0.0', port=port)
+    # Gunicorn実行時にFlaskサーバー自体は不要だが、念のため
+    # app.run(host='0.0.0.0', port=port) # Gunicornが代わりに実行するためコメントアウト推奨
 
 async def start_web_server():
-    # Botの非同期処理を邪魔しないように別スレッドで起動するぞ
+    # Botの非同期処理を邪魔しないように別スレッドでWebサーバーを監視（または起動）するぞ
+    # Gunicornを使う場合、このスレッド起動は主にログ目的または代替手段として使う
     server_thread = Thread(target=run_server)
     server_thread.start()
-# ------------------------------
+# ----------------------------------------------------
 
 class Config:
     def __init__(self):
@@ -48,17 +62,42 @@ class Config:
         
     def load_config(self):
         try:
+            # config.jsonのチェック
+            if not os.path.exists("./config.json"):
+                print(f"{Fore.RED}config.json not found! Creating default.")
+                default_config = {
+                    "token": "YOUR_USER_OR_BOT_TOKEN_HERE",
+                    "minimum_dm_delay": 1,
+                    "maximum_dm_delay": 3,
+                    "skip_booting": False,
+                    "skip_disclaimer": False,
+                    "minimum_ban_delay": 1,
+                    "maximum_ban_delay": 3,
+                    "minimum_general_delay": 0.5,
+                    "maximum_general_delay": 1.5
+                }
+                with open("./config.json", "w") as f:
+                    json.dump(default_config, f, indent=4)
+                print(f"{Fore.YELLOW}Please edit config.json and enter your token.")
+                sys.exit(1)
+
             with open("./config.json", "r") as f:
                 config = json.load(f)
                 self.minimum_dm = config.get("minimum_dm_delay", 1)
                 self.maximum_dm = config.get("maximum_dm_delay", 3)
                 self.token = config.get("token", "")
+                if self.token == "YOUR_USER_OR_BOT_TOKEN_HERE" or not self.token:
+                    print(f"{Fore.RED}Token not set in config.json, idiot!")
+                    sys.exit(1)
                 self.skip_booting = config.get("skip_booting", False)
                 self.skip_disclaimer = config.get("skip_disclaimer", False)
                 self.min_ban = config.get("minimum_ban_delay", 1)
                 self.max_ban = config.get("maximum_ban_delay", 3)
                 self.min_general = config.get("minimum_general_delay", 0.5)
                 self.max_general = config.get("maximum_general_delay", 1.5)
+        except json.JSONDecodeError:
+            print(f"{Fore.RED}Error: config.json is corrupted! Check syntax.")
+            sys.exit(1)
         except Exception as e:
             print(f"{Fore.RED}Error loading config: {e}")
             sys.exit(1)
@@ -82,9 +121,9 @@ async def show_disclaimer():
             f"{Fore.LIGHTWHITE_EX}This tool may get your account banned if used improperly"
         ]
         
-        for idx, msg in enumerate(messages):
+        for idx, msg in enumerate(messages, 1):
             print(msg)
-            await asyncio.sleep(0.8 if idx < len(messages) - 1 else 0)
+            await asyncio.sleep(0.8 if idx < len(messages) else 0)
 
 async def show_boot_animation():
     if not config.skip_booting:
@@ -120,6 +159,8 @@ class KarumaBot(discord.Client):
             status=discord.Status.idle
         )
         await clear_console()
+        # Webサーバーは既にGunicornによって起動しているが、ログを出すためにコールする
+        await start_web_server() 
         await main_menu(self)
 
     async def get_guild_by_id(self, guild_id):
@@ -313,9 +354,17 @@ async def raid_server(client, guild_id=None):
     # Get user input for all actions first
     new_name = input("New server name (leave blank to skip): ")
     channel_name = input("Channel name to spam: ")
-    channel_count = int(input("Number of channels to create (0 to skip): "))
+    try:
+        channel_count = int(input("Number of channels to create (0 to skip): "))
+    except ValueError:
+        channel_count = 0
+        
     role_name = input("Role name to spam: ")
-    role_count = int(input("Number of roles to create (0 to skip): "))
+    try:
+        role_count = int(input("Number of roles to create (0 to skip): "))
+    except ValueError:
+        role_count = 0
+        
     nickname = input("Nickname to set (leave blank to skip): ")
     
     # Prepare arguments based on user input
@@ -437,6 +486,8 @@ async def mass_dm_users(users):
         text_content = input(f"{Fore.LIGHTGREEN_EX}Enter text message: ")
     
     if message_type in ['embed', 'both']:
+        await clear_console()
+        print(f"{Fore.YELLOW}Creating Embed...")
         embed_content = await create_embed()
     
     if not text_content and not embed_content:
@@ -444,6 +495,8 @@ async def mass_dm_users(users):
         return
     
     total = len(users)
+    print(f"{Fore.YELLOW}Starting Mass DM to {total} users...")
+    
     for idx, user in enumerate(users, 1):
         try:
             # Skip if user is the bot itself
@@ -463,10 +516,17 @@ async def mass_dm_users(users):
                 
             print(f"{Fore.LIGHTGREEN_EX}[{idx}/{total}] Sent to {Fore.YELLOW}{user}")
         except Exception as e:
-            print(f"{Fore.RED}[{idx}/{total}] Failed to send to {Fore.YELLOW}{user}: {e}")
+            # 403 Forbidden (Blocked/Closed DM)は無視
+            if isinstance(e, discord.Forbidden):
+                 print(f"{Fore.RED}[{idx}/{total}] Failed to send to {Fore.YELLOW}{user} (DM blocked/Forbidden)")
+            else:
+                 print(f"{Fore.RED}[{idx}/{total}] Failed to send to {Fore.YELLOW}{user}: {e}")
         
         if idx < total:
             await asyncio.sleep(random_cooldown(config.minimum_dm, config.maximum_dm))
+    
+    print(f"{Fore.LIGHTGREEN_EX}Mass DM operation finished.")
+    input("Press Enter to continue")
 
 async def mass_dm_server(client, guild_id=None):
     if not guild_id:
@@ -498,30 +558,31 @@ async def list_servers(client):
         perms = []
         
         # Existing permission checks
-        if bot_member.guild_permissions.ban_members:
-            perms.append("Ban")
-        if bot_member.guild_permissions.manage_channels:
-            perms.append("Channels")
-        if bot_member.guild_permissions.manage_roles:
-            perms.append("Roles")
-        if bot_member.guild_permissions.manage_nicknames:
-            perms.append("Nicks")
-        if bot_member.guild_permissions.manage_emojis:
-            perms.append("Emojis")
-        if bot_member.guild_permissions.manage_guild:
-            perms.append("Server")
-        if bot_member.guild_permissions.create_instant_invite:
-            perms.append("Invites")
+        if bot_member and bot_member.guild_permissions.administrator:
+            perms.append("ADMIN")
+        else:
+            if bot_member and bot_member.guild_permissions.ban_members:
+                perms.append("Ban")
+            if bot_member and bot_member.guild_permissions.manage_channels:
+                perms.append("Channels")
+            if bot_member and bot_member.guild_permissions.manage_roles:
+                perms.append("Roles")
+            if bot_member and bot_member.guild_permissions.manage_nicknames:
+                perms.append("Nicks")
+            if bot_member and bot_member.guild_permissions.manage_emojis:
+                perms.append("Emojis")
+            if bot_member and bot_member.guild_permissions.manage_guild:
+                perms.append("Server")
 
         perm_status = f"{Fore.LIGHTGREEN_EX}Perms: {', '.join(perms)}" if perms else f"{Fore.RED}No key perms"
         
         print(f"\n{Fore.YELLOW}{guild.name} {Fore.LIGHTGREEN_EX}(ID: {guild.id}, Members: {guild.member_count}) {perm_status}")
         
         # Fetch and display permanent invites (non-expiring)
-        if bot_member.guild_permissions.manage_guild:
+        if bot_member and bot_member.guild_permissions.manage_guild:
             try:
                 invites = await guild.invites()
-                permanent_invites = [inv for inv in invites if inv.max_age == 0]  # Filter out expiring invites
+                permanent_invites = [inv for inv in invites if inv.max_age == 0] 
                 
                 if permanent_invites:
                     print(f"{Fore.CYAN}  Permanent Invites:")
@@ -555,13 +616,14 @@ async def leave_all_servers(client):
 async def main_menu(client):
     while True:
         await clear_console()
-        print(pyfade.Fade.Horizontal(pyfade.Colors.yellow_to_red, '''
-██╗  ██╗ █████╗ ██████╗ ██╗   ██╗███╗   ███╗ █████╗ 
-██║ ██╔╝██╔══██╗██╔══██╗██║   ██║████╗ ████║██╔══██╗
-█████═╝ ███████║██████╔╝██║   ██║██╔████╔██║███████║
-██╔═██╗ ██╔══██║██╔══██╗██║   ██║██║╚██╔╝██║██╔══██║
-██║ ╚██╗██║  ██║██║  ██║╚██████╔╝██║ ╚═╝ ██║██║  ██║
-╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝'''))
+        # pyfadeを削除したため、シンプルな表示に置き換え
+        print(f'''
+{Fore.LIGHTYELLOW_EX}██╗  ██╗ █████╗ ██████╗ ██╗   ██╗███╗   ███╗ █████╗ 
+{Fore.LIGHTYELLOW_EX}██║ ██╔╝██╔══██╗██╔══██╗██║   ██║████╗ ████║██╔══██╗
+{Fore.LIGHTYELLOW_EX}█████═╝ ███████║██████╔╝██║   ██║██╔████╔██║███████║
+{Fore.LIGHTYELLOW_EX}██╔═██╗ ██╔══██║██╔══██╗██║   ██║██║╚██╔╝██║██╔══██║
+{Fore.LIGHTYELLOW_EX}██║ ╚██╗██║  ██║██║  ██║╚██████╔╝██║ ╚═╝ ██║██║  ██║
+{Fore.LIGHTYELLOW_EX}╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝''')
         
         stats = f"Servers: {len(client.guilds)} | Users: {len(client.users)}"
         
@@ -606,8 +668,7 @@ async def main():
     await show_disclaimer()
     await show_boot_animation()
     
-    # 💥 Webサーバーをブチ上げるぞ！
-    await start_web_server()
+    # 💥 WebサーバーはGunicornによって起動しているため、Botのログインに進む
     
     global client
     client = KarumaBot()
