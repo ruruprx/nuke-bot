@@ -1,59 +1,49 @@
 #!/usr/bin/python
 # -*- coding: UTF-8 -*-
 import subprocess
-try:
-    from os import system, name
-    import sys, os, json, random, time, asyncio, discord 
-    from datetime import datetime
-    from discord.ext import commands
-    from colorama import Fore, init, Style; init()
-    # 24/7稼働に必要なモジュール
-    from flask import Flask
-    from threading import Thread
-except ImportError:
-    # クラッシュ回避のため、必要なモジュールをチェック
-    needed_packages = ['discord.py', 'Flask', 'gunicorn', 'requests', 'colorama']
-    # pyfadeは削除済み
-    
-    print(f"{Fore.RED}Missing dependencies. Installing now...")
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", *needed_packages])
-        # 再度インポートを試みる
-        from os import system, name
-        import sys, os, json, random, time, asyncio, discord
-        from datetime import datetime
-        from discord.ext import commands
-        from colorama import Fore, init, Style; init()
-        from flask import Flask
-        from threading import Thread
-    except Exception as e:
-        print(f"{Fore.RED}Failed to install dependencies: {e}")
-        sys.exit(1)
+import sys
+import os
+import json
+import random
+import time
+import asyncio
+import discord 
+from datetime import datetime
+from discord.ext import commands
+from colorama import Fore, init, Style; init()
+from flask import Flask
+from threading import Thread
 
 sys.tracebacklimit = 0
 
-# --- 24/7 Webサーバー機能 (Render/UptimeRobot対応) ---
-# GunicornがこのFlaskアプリ (app) をメインとしてロードする
+# --- 24/7 Webサーバー機能 (Render/Gunicorn対応) ---
+# GunicornがこのFlaskアプリ (app) をメインとしてロードします
 app = Flask(__name__)
 
 @app.route('/')
 def home():
     # UptimeRobotからのPingに応答するエンドポイント
-    return "Karuma Tool is alive, you dumb fucks!", 200
+    return "Server Management Bot is alive!", 200
 
 def run_server():
-    # Webサーバーをバックグラウンドで起動
-    # Renderは環境変数'PORT'を使う
+    # Gunicorn実行時にFlaskサーバー自体は不要ですが、ログ目的として
     port = os.environ.get('PORT', 8080) 
     print(f"{Fore.CYAN}Web Server running to keep the bot alive! Port {port}.")
-    # Gunicorn実行時にFlaskサーバー自体は不要だが、念のため
-    # app.run(host='0.0.0.0', port=port) # Gunicornが代わりに実行するためコメントアウト推奨
 
 async def start_web_server():
-    # Botの非同期処理を邪魔しないように別スレッドでWebサーバーを監視（または起動）するぞ
-    # Gunicornを使う場合、このスレッド起動は主にログ目的または代替手段として使う
+    # Botの非同期処理を邪魔しないように、Gunicornが実行していることを前提にログを出す
     server_thread = Thread(target=run_server)
     server_thread.start()
+# ----------------------------------------------------
+
+# --- スパムフィルターの設定とログ (簡易版) ---
+spam_settings = {
+    "word_filter_enabled": False,
+    "link_filter_enabled": False,
+    "blocked_words": ["死ね", "殺す", "くそ", "fxxk"],
+    "punishment_action": "delete" # 'delete' or 'warn'
+}
+spam_log_data = []
 # ----------------------------------------------------
 
 class Config:
@@ -61,43 +51,36 @@ class Config:
         self.load_config()
         
     def load_config(self):
-        try:
-            # config.jsonのチェック
-            if not os.path.exists("./config.json"):
-                print(f"{Fore.RED}config.json not found! Creating default.")
-                default_config = {
-                    "token": "YOUR_USER_OR_BOT_TOKEN_HERE",
-                    "minimum_dm_delay": 1,
-                    "maximum_dm_delay": 3,
-                    "skip_booting": False,
-                    "skip_disclaimer": False,
-                    "minimum_ban_delay": 1,
-                    "maximum_ban_delay": 3,
-                    "minimum_general_delay": 0.5,
-                    "maximum_general_delay": 1.5
-                }
-                with open("./config.json", "w") as f:
-                    json.dump(default_config, f, indent=4)
-                print(f"{Fore.YELLOW}Please edit config.json and enter your token.")
-                sys.exit(1)
-
-            with open("./config.json", "r") as f:
-                config = json.load(f)
-                self.minimum_dm = config.get("minimum_dm_delay", 1)
-                self.maximum_dm = config.get("maximum_dm_delay", 3)
-                self.token = config.get("token", "")
-                if self.token == "YOUR_USER_OR_BOT_TOKEN_HERE" or not self.token:
-                    print(f"{Fore.RED}Token not set in config.json, idiot!")
-                    sys.exit(1)
-                self.skip_booting = config.get("skip_booting", False)
-                self.skip_disclaimer = config.get("skip_disclaimer", False)
-                self.min_ban = config.get("minimum_ban_delay", 1)
-                self.max_ban = config.get("maximum_ban_delay", 3)
-                self.min_general = config.get("minimum_general_delay", 0.5)
-                self.max_general = config.get("maximum_general_delay", 1.5)
-        except json.JSONDecodeError:
-            print(f"{Fore.RED}Error: config.json is corrupted! Check syntax.")
+        # 1. 環境変数からトークンを読み込む (Renderで推奨される方法)
+        self.token = os.environ.get('BOT_TOKEN')
+        
+        if not self.token:
+            print(f"{Fore.RED}FATAL: トークンが見つかりません。Renderの環境変数に BOT_TOKEN を設定してください。")
             sys.exit(1)
+            
+        # 2. config.jsonから他の設定を読み込む（ファイルがない場合はデフォルト値を使用）
+        try:
+             with open("./config.json", "r") as f:
+                 config_data = json.load(f)
+                 # 以前の「荒らしBot」の設定を引き継いだ項目
+                 self.minimum_dm = config_data.get("minimum_dm_delay", 1)
+                 self.maximum_dm = config_data.get("maximum_dm_delay", 3)
+                 self.skip_booting = config_data.get("skip_booting", False)
+                 self.skip_disclaimer = config_data.get("skip_disclaimer", False)
+                 self.min_ban = config_data.get("minimum_ban_delay", 1)
+                 self.max_ban = config_data.get("maximum_ban_delay", 3)
+                 self.min_general = config_data.get("minimum_general_delay", 0.5)
+                 self.max_general = config_data.get("maximum_general_delay", 1.5)
+        except (FileNotFoundError, json.JSONDecodeError):
+             print(f"{Fore.YELLOW}Warning: config.jsonが見つからないか破損しています。デフォルト設定を使用します。")
+             self.minimum_dm = 1
+             self.maximum_dm = 3
+             self.skip_booting = False
+             self.skip_disclaimer = False
+             self.min_ban = 1
+             self.max_ban = 3
+             self.min_general = 0.5
+             self.max_general = 1.5
         except Exception as e:
             print(f"{Fore.RED}Error loading config: {e}")
             sys.exit(1)
@@ -110,576 +93,303 @@ def random_cooldown(minimum, maximum):
 async def clear_console():
     os.system('cls' if os.name == 'nt' else 'clear')
 
-async def show_disclaimer():
-    if not config.skip_disclaimer:
-        messages = [
-            f"{Fore.LIGHTWHITE_EX}{Style.BRIGHT}DISCLAIMER:",
-            f"{Style.RESET_ALL}{Fore.LIGHTWHITE_EX}User automation and spamming are {Fore.LIGHTYELLOW_EX}{Style.BRIGHT}against Discord's TOS!!{Style.RESET_ALL}{Fore.RESET}",
-            f"{Fore.LIGHTWHITE_EX}Use this tool only for educational purposes and at your own risk",
-            f"{Fore.LIGHTWHITE_EX}Ask the server owner if you're allowed to use this tool",
-            f"{Fore.LIGHTGREEN_EX}{Style.BRIGHT}Mass Dm {Style.RESET_ALL}{Fore.RESET}{Fore.LIGHTWHITE_EX}requires {Fore.LIGHTGREEN_EX}{Style.BRIGHT}Privileged Member Intents{Style.RESET_ALL}",
-            f"{Fore.LIGHTWHITE_EX}This tool may get your account banned if used improperly"
-        ]
-        
-        for idx, msg in enumerate(messages, 1):
-            print(msg)
-            await asyncio.sleep(0.8 if idx < len(messages) else 0)
-
-async def show_boot_animation():
-    if not config.skip_booting:
-        stages = [
-            f"{Style.BRIGHT}{Fore.LIGHTWHITE_EX}Booting {Fore.RED}Karuma {Fore.RESET}{Fore.LIGHTWHITE_EX}Tool",
-            f"{Fore.RED}25%",
-            f"{Fore.YELLOW}50%",
-            f"{Fore.LIGHTYELLOW_EX}75%",
-            f"{Fore.LIGHTGREEN_EX}99%",
-            f"{Fore.LIGHTBLUE_EX}Karuma Tool ready"
-        ]
-        
-        delays = [0.3, 0.5, 0.6, 0.7, 1, 1]
-        
-        for stage, delay in zip(stages, delays):
-            print(stage)
-            await asyncio.sleep(delay)
-
-class KarumaBot(discord.Client):
+# --- Botクラスの定義とDiscordコマンドの設定 ---
+class ServerManagerBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         intents = discord.Intents.default()
-        intents.members = True
-        intents.guilds = True
-        intents.message_content = True
-        super().__init__(intents=intents, *args, **kwargs)
+        intents.members = True          # メンバーリストの取得
+        intents.guilds = True           # サーバー情報の取得
+        intents.message_content = True  # メッセージ内容の読み取り (重要)
+        super().__init__(command_prefix='!', intents=intents, *args, **kwargs)
         
     async def on_ready(self):
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
-                name="github.com/hoemotion"
+                name="Server Management"
             ),
-            status=discord.Status.idle
+            status=discord.Status.online
         )
         await clear_console()
-        # Webサーバーは既にGunicornによって起動しているが、ログを出すためにコールする
         await start_web_server() 
+        print(f"{Fore.LIGHTGREEN_EX}Logged in as: {Fore.YELLOW}{self.user}")
+        
+        # 起動時にコマンドラインのメニューを表示
         await main_menu(self)
 
-    async def get_guild_by_id(self, guild_id):
-        return discord.utils.get(self.guilds, id=guild_id)
-
-async def check_permissions_and_confirm(guild, required_perms, action_name):
-    bot_member = guild.get_member(client.user.id)
-    missing_perms = [perm for perm, value in required_perms.items() if not getattr(bot_member.guild_permissions, perm)]
-    
-    if missing_perms:
-        print(f"{Fore.YELLOW}Warning: Missing permissions for {action_name}:")
-        for perm in missing_perms:
-            print(f"- {perm.replace('_', ' ').title()}")
-        
-        confirm = input(f"{Fore.LIGHTYELLOW_EX}Continue without {action_name}? (yes/no): ").lower()
-        if confirm != "yes":
-            return False, missing_perms
-        return True, missing_perms
-    return True, []
-
-async def nuke_server(client, guild_id=None):
-    if not guild_id:
-        while True:
-            try:
-                guild_id = int(input(f'{Fore.LIGHTYELLOW_EX}Enter server ID: '))
-                break
-            except ValueError:
-                print(f'{Fore.RED}Invalid ID')
-                
-    guild = await client.get_guild_by_id(guild_id)
-    if not guild:
-        print(f"{Fore.RED}Server not found")
-        return
-        
-    bot_member = guild.get_member(client.user.id)
-    reason = input("Ban reason (optional): ")
-    
-    # Define required permissions for each action group
-    action_groups = {
-        "ban_members": {
-            "name": "banning members",
-            "perms": {"ban_members": True},
-            "func": ban_members,
-            "args": (guild, bot_member, reason)
-        },
-        "manage_channels": {
-            "name": "deleting channels",
-            "perms": {"manage_channels": True},
-            "func": delete_channels,
-            "args": (guild,)
-        },
-        "manage_roles": {
-            "name": "deleting roles",
-            "perms": {"manage_roles": True},
-            "func": delete_roles,
-            "args": (guild, bot_member)
-        },
-        "manage_emojis": {
-            "name": "deleting emojis",
-            "perms": {"manage_emojis": True},
-            "func": delete_emojis,
-            "args": (guild,)
-        },
-        "manage_emojis_and_stickers": {
-            "name": "deleting stickers",
-            "perms": {"manage_emojis": True},  # Same permission for stickers
-            "func": delete_stickers,
-            "args": (guild,)
-        }
-    }
-    
-    # Process each action group with permission checks
-    for action in action_groups.values():
-        proceed, missing = await check_permissions_and_confirm(
-            guild, 
-            action["perms"], 
-            action["name"]
-        )
-        
-        if proceed and not missing:
-            await action["func"](*action["args"])
-    
-    print(f"{Fore.LIGHTGREEN_EX}Nuke operations completed")
-    input("Press Enter to continue")
-
-async def ban_members(guild, bot_member, reason):
-    members = [m for m in guild.members if m != client.user and m.top_role < bot_member.top_role]
-    total = len(members)
-    
-    for idx, member in enumerate(members, 1):
-        try:
-            await member.ban(reason=reason, delete_message_days=7)
-            print(f"{Fore.LIGHTGREEN_EX}[{idx}/{total}] Banned {Fore.YELLOW}{member}")
-        except Exception as e:
-            print(f"{Fore.RED}[{idx}/{total}] Failed to ban {Fore.YELLOW}{member}: {e}")
-        
-        if idx < total:
-            await asyncio.sleep(random_cooldown(config.min_ban, config.max_ban))
-
-async def delete_channels(guild):
-    for channel in guild.channels:
-        try:
-            await channel.delete()
-            print(f"{Fore.LIGHTGREEN_EX}Deleted channel: {Fore.YELLOW}{channel.name}")
-        except Exception as e:
-            print(f"{Fore.RED}Failed to delete channel {Fore.YELLOW}{channel.name}: {e}")
-        await asyncio.sleep(random_cooldown(config.min_general, config.max_general))
-
-async def delete_roles(guild, bot_member):
-    for role in guild.roles:
-        if role.name != "@everyone" and role.position < bot_member.top_role.position:
-            try:
-                await role.delete()
-                print(f"{Fore.LIGHTGREEN_EX}Deleted role: {Fore.YELLOW}{role.name}")
-            except Exception as e:
-                print(f"{Fore.RED}Failed to delete role {Fore.YELLOW}{role.name}: {e}")
-            await asyncio.sleep(random_cooldown(config.min_general, config.max_general))
-
-async def delete_emojis(guild):
-    emojis = await guild.fetch_emojis()
-    if not emojis:
-        print(f"{Fore.YELLOW}No emojis to delete")
-        return
-        
-    for emoji in emojis:
-        try:
-            await emoji.delete()
-            print(f"{Fore.LIGHTGREEN_EX}Deleted emoji: {Fore.YELLOW}{emoji.name}")
-        except Exception as e:
-            print(f"{Fore.RED}Failed to delete emoji {Fore.YELLOW}{emoji.name}: {e}")
-        await asyncio.sleep(random_cooldown(config.min_general, config.max_general))
-
-async def delete_stickers(guild):
-    stickers = await guild.fetch_stickers()
-    if not stickers:
-        print(f"{Fore.YELLOW}No stickers to delete")
-        return
-        
-    for sticker in stickers:
-        try:
-            await sticker.delete()
-            print(f"{Fore.LIGHTGREEN_EX}Deleted sticker: {Fore.YELLOW}{sticker.name}")
-        except Exception as e:
-            print(f"{Fore.RED}Failed to delete sticker {Fore.YELLOW}{sticker.name}: {e}")
-        await asyncio.sleep(random_cooldown(config.min_general, config.max_general))
-
-async def raid_server(client, guild_id=None):
-    if not guild_id:
-        while True:
-            try:
-                guild_id = int(input(f'{Fore.LIGHTYELLOW_EX}Enter server ID: '))
-                break
-            except ValueError:
-                print(f'{Fore.RED}Invalid ID')
-                
-    guild = await client.get_guild_by_id(guild_id)
-    if not guild:
-        print(f"{Fore.RED}Server not found")
-        return
-        
-    bot_member = guild.get_member(client.user.id)
-    
-    # Define action groups with required permissions
-    action_groups = {
-        "rename_server": {
-            "name": "renaming server",
-            "perms": {"manage_guild": True},
-            "func": rename_server,
-            "args": (guild,)
-        },
-        "create_channels": {
-            "name": "creating channels",
-            "perms": {"manage_channels": True},
-            "func": create_channels,
-            "args": (guild,)
-        },
-        "create_roles": {
-            "name": "creating roles",
-            "perms": {"manage_roles": True},
-            "func": create_roles,
-            "args": (guild,)
-        },
-        "change_nicks": {
-            "name": "changing nicknames",
-            "perms": {"manage_nicknames": True},
-            "func": change_nicknames,
-            "args": (guild, bot_member)
-        }
-    }
-    
-    # Get user input for all actions first
-    new_name = input("New server name (leave blank to skip): ")
-    channel_name = input("Channel name to spam: ")
-    try:
-        channel_count = int(input("Number of channels to create (0 to skip): "))
-    except ValueError:
-        channel_count = 0
-        
-    role_name = input("Role name to spam: ")
-    try:
-        role_count = int(input("Number of roles to create (0 to skip): "))
-    except ValueError:
-        role_count = 0
-        
-    nickname = input("Nickname to set (leave blank to skip): ")
-    
-    # Prepare arguments based on user input
-    action_groups["rename_server"]["args"] = (guild, new_name) if new_name else None
-    action_groups["create_channels"]["args"] = (guild, channel_name, channel_count) if channel_count > 0 else None
-    action_groups["create_roles"]["args"] = (guild, role_name, role_count) if role_count > 0 else None
-    action_groups["change_nicks"]["args"] = (guild, bot_member, nickname) if nickname else None
-    
-    # Process each action group
-    for action in action_groups.values():
-        if action["args"] is None:
-            continue
-            
-        proceed, missing = await check_permissions_and_confirm(
-            guild, 
-            action["perms"], 
-            action["name"]
-        )
-        
-        if proceed and not missing:
-            await action["func"](*action["args"])
-    
-    print(f"{Fore.LIGHTGREEN_EX}Raid operations completed")
-    input("Press Enter to continue")
-
-async def rename_server(guild, new_name):
-    try:
-        await guild.edit(name=new_name)
-        print(f"{Fore.LIGHTGREEN_EX}Server renamed to {Fore.YELLOW}{new_name}")
-    except Exception as e:
-        print(f"{Fore.RED}Failed to rename server: {e}")
-
-async def create_channels(guild, channel_name, count):
-    for i in range(count):
-        try:
-            await guild.create_text_channel(f"{channel_name}-{i+1}")
-            print(f"{Fore.LIGHTGREEN_EX}Created channel {Fore.YELLOW}{channel_name}-{i+1}")
-        except Exception as e:
-            print(f"{Fore.RED}Failed to create channel: {e}")
-        await asyncio.sleep(random_cooldown(config.min_general, config.max_general))
-
-async def create_roles(guild, role_name, count):
-    for i in range(count):
-        try:
-            await guild.create_role(name=f"{role_name}-{i+1}")
-            print(f"{Fore.LIGHTGREEN_EX}Created role {Fore.YELLOW}{role_name}-{i+1}")
-        except Exception as e:
-            print(f"{Fore.RED}Failed to create role: {e}")
-        await asyncio.sleep(random_cooldown(config.min_general, config.max_general))
-
-async def change_nicknames(guild, bot_member, nickname):
-    members = [m for m in guild.members if m != client.user and m.top_role < bot_member.top_role]
-    for member in members:
-        try:
-            await member.edit(nick=nickname)
-            print(f"{Fore.LIGHTGREEN_EX}Changed nickname for {Fore.YELLOW}{member}")
-        except Exception as e:
-            print(f"{Fore.RED}Failed to change nickname for {Fore.YELLOW}{member}: {e}")
-        await asyncio.sleep(random_cooldown(config.min_general, config.max_general))
-
-async def create_embed():
-    embed = discord.Embed()
-    
-    title = input(f"{Fore.LIGHTGREEN_EX}Embed title (leave blank for none): ")
-    if title:
-        embed.title = title
-    
-    description = input(f"{Fore.LIGHTGREEN_EX}Embed description (leave blank for none): ")
-    if description:
-        embed.description = description
-    
-    color = input(f"{Fore.LIGHTGREEN_EX}Embed color (hex without #, e.g., FF0000 for red): ")
-    if color:
-        try:
-            embed.color = int(color, 16)
-        except:
-            embed.color = discord.Color.random()
-    
-    # Add fields
-    while True:
-        field_name = input(f"{Fore.LIGHTGREEN_EX}Add field? Enter name (leave blank to stop): ")
-        if not field_name:
-            break
-        field_value = input(f"{Fore.LIGHTGREEN_EX}Field value: ")
-        inline = input(f"{Fore.LIGHTGREEN_EX}Inline field? (y/n): ").lower() == 'y'
-        embed.add_field(name=field_name, value=field_value, inline=inline)
-    
-    # Set author
-    author_name = input(f"{Fore.LIGHTGREEN_EX}Author name (leave blank for none): ")
-    if author_name:
-        author_icon = input(f"{Fore.LIGHTGREEN_EX}Author icon URL (leave blank for none): ")
-        embed.set_author(name=author_name, icon_url=author_icon if author_icon else None)
-    
-    # Set footer
-    footer_text = input(f"{Fore.LIGHTGREEN_EX}Footer text (leave blank for none): ")
-    if footer_text:
-        footer_icon = input(f"{Fore.LIGHTGREEN_EX}Footer icon URL (leave blank for none): ")
-        embed.set_footer(text=footer_text, icon_url=footer_icon if footer_icon else None)
-    
-    # Set thumbnail
-    thumbnail = input(f"{Fore.LIGHTGREEN_EX}Thumbnail URL (leave blank for none): ")
-    if thumbnail:
-        embed.set_thumbnail(url=thumbnail)
-    
-    # Set image
-    image = input(f"{Fore.LIGHTGREEN_EX}Image URL (leave blank for none): ")
-    if image:
-        embed.set_image(url=image)
-    
-    return embed
-
-async def mass_dm_users(users):
-    message_type = input(f"{Fore.LIGHTGREEN_EX}Message type (text/embed/both): ").lower()
-    
-    text_content = None
-    embed_content = None
-    
-    if message_type in ['text', 'both']:
-        text_content = input(f"{Fore.LIGHTGREEN_EX}Enter text message: ")
-    
-    if message_type in ['embed', 'both']:
-        await clear_console()
-        print(f"{Fore.YELLOW}Creating Embed...")
-        embed_content = await create_embed()
-    
-    if not text_content and not embed_content:
-        print(f"{Fore.RED}No message content provided")
-        return
-    
-    total = len(users)
-    print(f"{Fore.YELLOW}Starting Mass DM to {total} users...")
-    
-    for idx, user in enumerate(users, 1):
-        try:
-            # Skip if user is the bot itself
-            if user.id == client.user.id:
-                continue
-                
-            # Skip bots
-            if user.bot:
-                continue
-                
-            if text_content and embed_content:
-                await user.send(content=text_content, embed=embed_content)
-            elif text_content:
-                await user.send(content=text_content)
-            elif embed_content:
-                await user.send(embed=embed_content)
-                
-            print(f"{Fore.LIGHTGREEN_EX}[{idx}/{total}] Sent to {Fore.YELLOW}{user}")
-        except Exception as e:
-            # 403 Forbidden (Blocked/Closed DM)は無視
-            if isinstance(e, discord.Forbidden):
-                 print(f"{Fore.RED}[{idx}/{total}] Failed to send to {Fore.YELLOW}{user} (DM blocked/Forbidden)")
-            else:
-                 print(f"{Fore.RED}[{idx}/{total}] Failed to send to {Fore.YELLOW}{user}: {e}")
-        
-        if idx < total:
-            await asyncio.sleep(random_cooldown(config.minimum_dm, config.maximum_dm))
-    
-    print(f"{Fore.LIGHTGREEN_EX}Mass DM operation finished.")
-    input("Press Enter to continue")
-
-async def mass_dm_server(client, guild_id=None):
-    if not guild_id:
-        while True:
-            try:
-                guild_id = int(input(f'{Fore.LIGHTYELLOW_EX}Enter server ID: '))
-                break
-            except ValueError:
-                print(f'{Fore.RED}Invalid ID')
-                
-    guild = await client.get_guild_by_id(guild_id)
-    if not guild:
-        print(f"{Fore.RED}Server not found")
-        return
-        
-    print(f'Target: {Fore.YELLOW}{guild.name}')
-    
-    members = [m for m in guild.members if not m.bot]  # Exclude bots
-    await mass_dm_users(members)
-
-async def mass_dm_all_users(client):
-    users = [u for u in client.users if not u.bot]  # Exclude bots
-    await mass_dm_users(users)
-
-async def list_servers(client):
-    print(f"{Fore.LIGHTGREEN_EX}Connected servers:")
-    for guild in client.guilds:
-        bot_member = guild.get_member(client.user.id)
-        perms = []
-        
-        # Existing permission checks
-        if bot_member and bot_member.guild_permissions.administrator:
-            perms.append("ADMIN")
+    async def on_command_error(self, ctx, error):
+        if isinstance(error, commands.MissingPermissions):
+            permission = str(error.missing_permissions[0]).replace('_', ' ').title()
+            await ctx.send(f"❌ 権限がありません。必要な権限: **{permission}**")
+        elif isinstance(error, commands.CommandNotFound):
+            # コマンドが見つからないエラーは無視（CLIメニュー操作が優先のため）
+            pass 
         else:
-            if bot_member and bot_member.guild_permissions.ban_members:
-                perms.append("Ban")
-            if bot_member and bot_member.guild_permissions.manage_channels:
-                perms.append("Channels")
-            if bot_member and bot_member.guild_permissions.manage_roles:
-                perms.append("Roles")
-            if bot_member and bot_member.guild_permissions.manage_nicknames:
-                perms.append("Nicks")
-            if bot_member and bot_member.guild_permissions.manage_emojis:
-                perms.append("Emojis")
-            if bot_member and bot_member.guild_permissions.manage_guild:
-                perms.append("Server")
+            print(f"{Fore.RED}Discord Command Error: {error}")
+            # raise error # デバッグ用にエラーを再発生させることも可能
 
-        perm_status = f"{Fore.LIGHTGREEN_EX}Perms: {', '.join(perms)}" if perms else f"{Fore.RED}No key perms"
+    async def on_message(self, message):
+        # Bot自身やシステムメッセージは無視
+        if message.author.bot or message.webhook_id:
+            await self.process_commands(message)
+            return
+
+        # ------------------- スパムフィルターの実行 -------------------
+        content = message.content.lower()
+        detected = False
+        reason = ""
+
+        # ワードスパムチェック
+        if spam_settings["word_filter_enabled"]:
+            for word in spam_settings["blocked_words"]:
+                if word in content:
+                    detected = True
+                    reason = f"禁止ワード検出: `{word}`"
+                    break
         
-        print(f"\n{Fore.YELLOW}{guild.name} {Fore.LIGHTGREEN_EX}(ID: {guild.id}, Members: {guild.member_count}) {perm_status}")
-        
-        # Fetch and display permanent invites (non-expiring)
-        if bot_member and bot_member.guild_permissions.manage_guild:
-            try:
-                invites = await guild.invites()
-                permanent_invites = [inv for inv in invites if inv.max_age == 0] 
+        # リンクスパムチェック (簡易版)
+        if not detected and spam_settings["link_filter_enabled"]:
+            if "discord.gg/" in content or "discord.com/invite/" in content:
+                detected = True
+                reason = "招待リンクスパム検出"
                 
-                if permanent_invites:
-                    print(f"{Fore.CYAN}  Permanent Invites:")
-                    for invite in permanent_invites:
-                        print(f"  - {Fore.LIGHTBLUE_EX}{invite.url} (Uses: {invite.uses}, Created by: {invite.inviter})")
-                else:
-                    print(f"{Fore.RED}  No permanent invites found.")
-            except discord.Forbidden:
-                print(f"{Fore.RED}  No invite access (missing 'Manage Server' permission)")
-            except Exception as e:
-                print(f"{Fore.RED}  Failed to fetch invites: {e}")
-    
-    input("\nPress Enter to continue...")
+        # スパムが検出された場合の処理
+        if detected:
+            if spam_settings["punishment_action"] == "delete":
+                try:
+                    await message.delete()
+                except discord.Forbidden:
+                    print(f"{Fore.RED}メッセージ削除権限がありません。")
+                    
+            # ログを記録
+            log_entry = {
+                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "user": str(message.author),
+                "user_id": message.author.id,
+                "channel": message.channel.name,
+                "reason": reason,
+                "content": message.content
+            }
+            spam_log_data.append(log_entry)
+            print(f"{Fore.YELLOW}🚨 スパム検出: {reason} by {message.author}")
 
-async def leave_all_servers(client):
-    confirm = input(f"{Fore.RED}Are you sure? (yes/no): ").lower()
-    if confirm != "yes":
+        # ------------------- Discordコマンドの処理 -------------------
+        await self.process_commands(message)
+
+# Botインスタンスの作成
+client = ServerManagerBot()
+
+# --- Discordコマンドの定義 (Chat Commands) ---
+
+@client.command(name="ping")
+async def ping_command(ctx):
+    """コマンド実行者の応答速度を確認します"""
+    latency = client.latency * 1000 
+    embed = discord.Embed(
+        title="🏓 Pong!",
+        description=f"現在の応答速度 (Latency): **{latency:.2f}ms**",
+        color=discord.Color.blue()
+    )
+    await ctx.send(embed=embed)
+
+@client.command(name="serverinfo")
+async def serverinfo_command(ctx):
+    """現在のサーバー情報が表示されます"""
+    guild = ctx.guild 
+    embed = discord.Embed(
+        title=f"【 {guild.name} 】のサーバー情報",
+        color=discord.Color.green(),
+        timestamp=ctx.message.created_at
+    )
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    embed.add_field(name="🌐 サーバーID", value=guild.id, inline=True)
+    embed.add_field(name="👑 オーナー", value=guild.owner.mention, inline=True)
+    embed.add_field(name="📅 作成日", value=guild.created_at.strftime("%Y/%m/%d"), inline=True)
+    embed.add_field(name="👥 メンバー数", value=guild.member_count, inline=True)
+    embed.add_field(name="🛡️ ロール数", value=len(guild.roles), inline=True)
+    embed.add_field(name="💬 チャンネル数", value=len(guild.channels), inline=True)
+    await ctx.send(embed=embed)
+
+@client.command(name="get_avatar")
+async def get_avatar_command(ctx, member: discord.Member = None):
+    """指定したユーザー（または実行者）のアバターURLを表示します"""
+    if member is None:
+        member = ctx.author
+    avatar_url = member.display_avatar.url
+    embed = discord.Embed(
+        title=f"👤 {member.display_name} のアバター",
+        color=discord.Color.blue()
+    )
+    embed.set_image(url=avatar_url)
+    embed.add_field(name="🔗 URL", value=f"[画像を直接表示]({avatar_url})", inline=False)
+    await ctx.send(embed=embed)
+
+@client.command(name="slowmode")
+@commands.has_permissions(manage_channels=True)
+async def slowmode_command(ctx, seconds: int):
+    """チャンネルの低速モードを設定し、スパムを防ぎます。"""
+    if seconds < 0 or seconds > 21600:
+        await ctx.send("設定できる秒数は0秒から21600秒（6時間）の間です。", ephemeral=True)
+        return
+    try:
+        await ctx.channel.edit(slowmode_delay=seconds)
+        if seconds == 0:
+            await ctx.send(f"✅ {ctx.channel.mention} の低速モードを**解除**しました。")
+        else:
+            await ctx.send(f"✅ {ctx.channel.mention} の低速モードを**{seconds}秒**に設定しました。")
+    except discord.Forbidden:
+        await ctx.send("🚨 権限不足：Botにチャンネル管理権限がありません。", ephemeral=True)
+
+@client.command(name="spam_filter")
+@commands.has_permissions(administrator=True)
+async def spam_filter_command(ctx, filter_type: str = None, action: str = None):
+    """スパムフィルターの設定を行います (メモリ内保存)"""
+    if filter_type is None:
+        await ctx.send(f"現在の設定: ワードブロック: {spam_settings['word_filter_enabled']}, リンクブロック: {spam_settings['link_filter_enabled']}")
         return
         
-    for guild in client.guilds:
-        try:
-            await guild.leave()
-            print(f"{Fore.LIGHTGREEN_EX}Left {Fore.YELLOW}{guild.name}")
-        except Exception as e:
-            print(f"{Fore.RED}Failed to leave {Fore.YELLOW}{guild.name}: {e}")
-        await asyncio.sleep(1)
+    filter_type = filter_type.lower()
     
-    print(f"{Fore.LIGHTGREEN_EX}Left all servers")
-    input("Press Enter to continue")
+    if filter_type == "word" and action in ["on", "off"]:
+        spam_settings["word_filter_enabled"] = (action == "on")
+        await ctx.send(f"✅ ワードスパムフィルターを {'有効' if action == 'on' else '無効'} にしました。")
+    elif filter_type == "link" and action in ["on", "off"]:
+        spam_settings["link_filter_enabled"] = (action == "on")
+        await ctx.send(f"✅ 招待リンクフィルターを {'有効' if action == 'on' else '無効'} にしました。")
+    else:
+        await ctx.send("無効な引数です。使い方: `!spam_filter word on` または `!spam_filter link off`")
+
+@client.command(name="spam_log")
+@commands.has_permissions(manage_messages=True)
+async def spam_log_command(ctx, count: int = 5):
+    """最新のスパム検出ログを表示します (メモリ内保存)"""
+    if not spam_log_data:
+        await ctx.send("現在、記録されているスパムログはありません。")
+        return
+
+    logs_to_display = spam_log_data[-count:]
+    embed = discord.Embed(
+        title=f"📋 最新 {len(logs_to_display)} 件のスパム検出ログ",
+        color=discord.Color.orange()
+    )
+    for entry in reversed(logs_to_display):
+        log_text = (
+            f"**理由**: {entry['reason']}\n"
+            f"**ユーザー**: {entry['user']} ({entry['user_id']})\n"
+            f"**チャンネル**: {entry['channel']}\n"
+            f"**メッセージ**: `{entry['content'][:50]}...`"
+        )
+        embed.add_field(name=f"[{entry['time']}]", value=log_text, inline=False)
+    await ctx.send(embed=embed)
+
+
+# --- CLIメニュー定義 (Console Operations) ---
+
+async def show_disclaimer():
+    if not config.skip_disclaimer:
+        messages = [
+            f"{Fore.LIGHTWHITE_EX}{Style.BRIGHT}DISCLAIMER (免責事項):",
+            f"{Fore.LIGHTWHITE_EX}このツールはサーバー管理の学習目的で提供されています。",
+            f"{Fore.LIGHTGREEN_EX}{Style.BRIGHT}Botトークンは環境変数 BOT_TOKEN に設定されています。{Style.RESET_ALL}{Fore.RESET}",
+            f"{Fore.LIGHTWHITE_EX}大量DMなどの機能は削除され、健全な管理機能に置き換えられています。"
+        ]
+        for msg in messages:
+            print(msg)
+            await asyncio.sleep(0.3)
+
+async def show_boot_animation():
+    if not config.skip_booting:
+        stages = ["Booting Management Tool", "25%", "50%", "75%", "100%"]
+        delays = [0.3, 0.5, 0.6, 0.7, 0.2]
+        for stage, delay in zip(stages, delays):
+            print(f"{Fore.LIGHTWHITE_EX}{stage}")
+            await asyncio.sleep(delay)
+
+# CLI操作関数 (以前のnuke/raid機能を置き換え)
+async def cli_kick_member(client, guild_id, user_id, reason="CLIからのキック"):
+    guild = client.get_guild(guild_id)
+    if not guild:
+        print(f"{Fore.RED}サーバーID {guild_id} が見つかりません。")
+        return
+    member = guild.get_member(user_id)
+    if not member:
+        print(f"{Fore.RED}ユーザーID {user_id} がサーバーに見つかりません。")
+        return
+    try:
+        await member.kick(reason=reason)
+        print(f"{Fore.LIGHTGREEN_EX}{member.display_name} をキックしました。理由: {reason}")
+    except discord.Forbidden:
+        print(f"{Fore.RED}キック権限がありません（Botのロール順位を確認してください）。")
+    except Exception as e:
+        print(f"{Fore.RED}キック失敗: {e}")
+    input("Press Enter to continue...")
+
 
 async def main_menu(client):
     while True:
         await clear_console()
-        # pyfadeを削除したため、シンプルな表示に置き換え
+        
+        # 簡易ASCIIアート
         print(f'''
-{Fore.LIGHTYELLOW_EX}██╗  ██╗ █████╗ ██████╗ ██╗   ██╗███╗   ███╗ █████╗ 
-{Fore.LIGHTYELLOW_EX}██║ ██╔╝██╔══██╗██╔══██╗██║   ██║████╗ ████║██╔══██╗
-{Fore.LIGHTYELLOW_EX}█████═╝ ███████║██████╔╝██║   ██║██╔████╔██║███████║
-{Fore.LIGHTYELLOW_EX}██╔═██╗ ██╔══██║██╔══██╗██║   ██║██║╚██╔╝██║██╔══██║
-{Fore.LIGHTYELLOW_EX}██║ ╚██╗██║  ██║██║  ██║╚██████╔╝██║ ╚═╝ ██║██║  ██║
-{Fore.LIGHTYELLOW_EX}╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝''')
+{Fore.LIGHTYELLOW_EX}███████╗███████╗██████╗ ███████╗██╗   ██╗██████╗ 
+{Fore.LIGHTYELLOW_EX}██╔════╝██╔════╝██╔══██╗██╔════╝██║   ██║██╔══██╗
+{Fore.LIGHTYELLOW_EX}███████╗█████╗  ██████╔╝█████╗  ██║   ██║██████╔╝
+{Fore.LIGHTYELLOW_EX}╚════██║██╔══╝  ██╔══██╗██╔══╝  ██║   ██║██╔══██╗
+{Fore.LIGHTYELLOW_EX}███████║███████╗██║  ██║███████╗╚██████╔╝██║  ██║
+{Fore.LIGHTYELLOW_EX}╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝''')
         
         stats = f"Servers: {len(client.guilds)} | Users: {len(client.users)}"
         
-        print(f'''{Fore.LIGHTWHITE_EX}                          Made by {Fore.YELLOW}hoemotion
+        print(f'''{Fore.LIGHTWHITE_EX}                          Server Management Tool
 
-{Fore.LIGHTWHITE_EX}GitHub: {Fore.LIGHTBLUE_EX}https://github.com/hoemotion/Karuma
 {Fore.LIGHTGREEN_EX}Logged in as: {Fore.YELLOW}{client.user}
 {Fore.LIGHTGREEN_EX}{stats}
 
-{Fore.LIGHTGREEN_EX}[1] Nuke Server (Ban members, delete channels/roles/emojis/stickers)
-{Fore.LIGHTGREEN_EX}[2] Raid Server (Spam channels/roles, change nicks)
-{Fore.LIGHTGREEN_EX}[3] Mass DM Server (with embed support)
-{Fore.LIGHTGREEN_EX}[4] Mass DM All Users (with embed support)
-{Fore.LIGHTGREEN_EX}[5] List Servers (with permission info)
-{Fore.LIGHTGREEN_EX}[6] Leave All Servers
-{Fore.LIGHTGREEN_EX}[7] Exit
+{Fore.LIGHTGREEN_EX}[1] CLI Kick Member (コンソールからのキック実行)
+{Fore.LIGHTGREEN_EX}[2] Exit (Botを停止)
+
+{Fore.LIGHTWHITE_EX}--- Discordコマンド (チャットで利用) ---
+{Fore.LIGHTWHITE_EX}  !ping, !serverinfo, !get_avatar, !slowmode [秒数]
+{Fore.LIGHTWHITE_EX}  !spam_filter [word/link] [on/off], !spam_log
 ''')
         
         choice = input(f"{Fore.LIGHTGREEN_EX}Select>> ").lower()
         
         if choice == '1':
-            await nuke_server(client)
-        elif choice == '2':
-            await raid_server(client)
-        elif choice == '3':
-            await mass_dm_server(client)
-        elif choice == '4':
-            await mass_dm_all_users(client)
-        elif choice == '5':
-            await list_servers(client)
-        elif choice == '6':
-            await leave_all_servers(client)
-        elif choice in ['7', 'quit', 'exit']:
+            try:
+                guild_id = int(input(f'{Fore.LIGHTYELLOW_EX}対象サーバーIDを入力: '))
+                user_id = int(input(f'{Fore.LIGHTYELLOW_EX}キック対象のユーザーIDを入力: '))
+                reason = input(f'{Fore.LIGHTYELLOW_EX}キックの理由を入力 (任意): ')
+                await cli_kick_member(client, guild_id, user_id, reason)
+            except ValueError:
+                print(f'{Fore.RED}無効なIDが入力されました。')
+                await asyncio.sleep(1)
+                
+        elif choice in ['2', 'quit', 'exit']:
             print(f"{Fore.LIGHTGREEN_EX}Goodbye!")
             await client.close()
             sys.exit(0)
         else:
-            print(f"{Fore.RED}Invalid choice")
+            print(f"{Fore.RED}無効な選択です")
             await asyncio.sleep(1)
+
 
 async def main():
     await show_disclaimer()
     await show_boot_animation()
     
-    # 💥 WebサーバーはGunicornによって起動しているため、Botのログインに進む
-    
-    global client
-    client = KarumaBot()
     try:
         await client.start(config.token)
     except discord.LoginFailure:
-        print(f"{Fore.RED}Invalid token - check your config.json, asshole!")
+        print(f"{Fore.RED}無効なトークンです - 環境変数 BOT_TOKEN を確認してください。")
         sys.exit(1)
     except Exception as e:
-        print(f"{Fore.RED}Error: {e}")
+        print(f"{Fore.RED}致命的なエラー: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print(f"{Fore.YELLOW}Botを停止します。")
